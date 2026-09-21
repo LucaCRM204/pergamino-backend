@@ -69,6 +69,24 @@ app.options('*', cors(corsOpts));
 // Servir archivos estáticos (PDFs de scoring)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// El bot de WhatsApp avisa acá cuando le llega un mensaje nuevo, para
+// que el CRM lo empuje por socket y el chat se actualice en vivo sin
+// que el vendedor tenga que refrescar. Autenticación simple con su
+// propia clave (no toca leads directamente, así que no necesita el
+// middleware de auth de usuarios).
+app.post('/api/wa-notification', express.json(), (req, res) => {
+  const key = req.headers['x-notify-key'];
+  if (!process.env.WA_NOTIFY_KEY || key !== process.env.WA_NOTIFY_KEY) {
+    return res.status(401).json({ error: 'x-notify-key inválida' });
+  }
+  const { leadId, phone, message } = req.body || {};
+  const io = app.get('io');
+  if (io) {
+    io.emit('wa:message', { leadId, phone, message, timestamp: new Date().toISOString() });
+  }
+  res.json({ ok: true });
+});
+
 // Rutas principales
 app.use('/api/auth', authRouter);
 
