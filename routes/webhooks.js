@@ -5,6 +5,8 @@
  * Genéricos (round-robin parejo entre vendedores activos):
  *   POST /api/webhooks/whatsapp-bot        -> leads simples, fuente community
  *   POST /api/webhooks/zapier-formularios  -> leads de formularios via Zapier
+ *   POST /api/webhooks/sheets              -> leads desde Google Sheets (Apps Script),
+ *                                             fuente = nombre del sheet (ej: emanuel)
  *
  * Bot de WhatsApp con IA (index.js del bot, puerto 3700):
  *   POST /api/webhooks/zapier              -> crea el lead al primer mensaje (parcial)
@@ -13,6 +15,9 @@
  * Autenticación:
  * - whatsapp-bot / zapier-formularios: header x-api-key contra LEAD_API_KEYS
  *   (ver middleware/intakeAuth.js). Formato: whatsapp-bot:clave123;...
+ * - sheets: header x-api-key contra LEAD_API_KEYS, la key tiene que tener
+ *   nombre "sheet-<algo>". La fuente del lead es <algo>.
+ *   Ej: sheet-emanuel:abc123  -> fuente "emanuel"
  * - zapier / bot-lead-update: header x-zapier-key contra ZAPIER_WEBHOOK_KEY
  *   del .env (tiene que coincidir con el ZAPIER_KEY del bot).
  */
@@ -154,6 +159,127 @@ router.post('/zapier-formularios', intakeAuth, async (req, res) => {
     });
   } catch (error) {
     console.error('[zapier-formularios] Error:', error);
+    res.status(500).json({ error: 'Error al procesar lead' });
+  }
+});
+
+// ========================================
+// POST /api/webhooks/sheets
+// Leads desde Google Sheets (Apps Script). Round-robin entre vendedores
+// activos. La fuente sale del nombre de la key: sheet-emanuel -> "emanuel".
+// Si el teléfono ya entró en los últimos DIAS_DUPLICADO días, no crea
+// otro lead: devuelve { duplicado: true, leadId } del existente.
+// ========================================
+const DIAS_DUPLICADO = 30;
+
+function parseLeadKeys_() {
+  // LEAD_API_KEYS = "whatsapp-bot:clave1;sheet-emanuel:clave2;..."
+  const mapa = {};
+  String(process.env.LEAD_API_KEYS || '')
+    .split(';')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .forEach(par => {
+      const i = par.indexOf(':');
+      if (i <= 0) return;
+      const nombre = par.slice(0, i).trim();
+      const clave = par.slice(i + 1).trim();
+      if (nombre && clave) mapa[clave] = nombre;
+    });
+  return mapa;
+}
+
+function requireSheetKey(req, res, next) {
+  const key = String(req.headers['x-api-key'] || '').trim();
+  const nombre = key ? parseLeadKeys_()[key] : null;
+  if (!nombre) {
+    return res.status(401).json({ error: 'x-api-key inválida' });
+  }
+  if (!nombre.startsWith('sheet-')) {
+    return res.status(403).json({ error: 'La key no es de un sheet (tiene que llamarse sheet-<nombre>)' });
+  }
+  req.sheetFuente = nombre.slice('sheet-'.length) || 'sheet';
+  next();
+}
+
+router.post('/sheets', requireSheetKey, async (req, res) => {
+  const fuente = req.sheetFuente;
+  try {
+    const body = req.body || {};
+    const nombre = String(body.nombre || '').trim();
+    const telefono = String(body.telefono || '').trim().replace(/^p:/i, '');
+    const modelo = String(body.modelo || '').trim();
+    const localidad = String(body.localidad || '').trim();
+    const consulta = String(body.consulta || '').trim();
+    const extras = String(body.notas || '').trim();
+
+    console.log(`[sheets:${fuente}] Recibido:`, JSON.stringify(body));
+
+    if (!nombre || !telefono) {
+      return res.status(400).json({
+        error: 'Nombre y telefono son requeridos',
+        received: { nombre, telefono }
+      });
+    }
+
+    // Duplicado por teléfono (comparando los últimos 10 dígitos)
+    const digitos = telefono.replace(/\D/g, '');
+    if (digitos.length >= 8) {
+      const ultimos = digitos.slice(-10);
+      const [dups] = await pool.execute(
+        `SELECT id, assigned_to FROM leads
+         WHERE REGEXP_REPLACE(telefono, '[^0-9]', '') LIKE ?
+           AND created_at >= DATE_SUB(NOW(), INTERVAL ${DIAS_DUPLICADO} DAY)
+         ORDER BY id DESC LIMIT 1`,
+        [`%${ultimos}`]
+      );
+      if (dups.length) {
+        console.log(`[sheets:${fuente}] Duplicado ${telefono} -> lead #${dups[0].id}`);
+        return res.json({
+          ok: true,
+          duplicado: true,
+          leadId: dups[0].id,
+          assignedTo: dups[0].assigned_to,
+          fuente
+        });
+      }
+    }
+
+    const assigned_to = await asignarVendedor(null, `sheets:${fuente}`);
+    if (!assigned_to) {
+      return res.status(500).json({ error: 'No hay vendedores activos para asignar' });
+    }
+
+    const notas = [
+      localidad ? `Localidad: ${localidad}` : '',
+      consulta ? `Consulta: ${consulta}` : '',
+      extras
+    ].filter(Boolean).join(' | ');
+
+    const [result] = await pool.execute(
+      `INSERT INTO leads
+        (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at, assigned_at)
+       VALUES
+        (?, ?, ?, 'vw', 'Consultar', 'nuevo', ?, ?, ?, NOW(), NOW())`,
+      [nombre, telefono, modelo || 'Consultar', fuente, notas, assigned_to]
+    );
+
+    const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
+    const lead = leadRows[0] || null;
+
+    const io = req.app.get('io');
+    if (io && lead) io.emit('lead:created', lead);
+
+    res.json({
+      ok: true,
+      duplicado: false,
+      lead,
+      leadId: result.insertId,
+      assignedTo: assigned_to,
+      fuente
+    });
+  } catch (error) {
+    console.error(`[sheets:${fuente}] Error:`, error);
     res.status(500).json({ error: 'Error al procesar lead' });
   }
 });
