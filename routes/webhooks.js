@@ -6,7 +6,7 @@
  *   POST /api/webhooks/whatsapp-bot        -> leads simples, fuente community
  *   POST /api/webhooks/zapier-formularios  -> leads de formularios via Zapier
  *   POST /api/webhooks/sheets              -> leads desde Google Sheets (Apps Script),
- *                                             fuente = nombre del sheet (ej: emanuel)
+ *                                             fuente = nombre del sheet (ej: emanuel, fastlead)
  *
  * Bot de WhatsApp con IA (index.js del bot, puerto 3700):
  *   POST /api/webhooks/zapier              -> crea el lead al primer mensaje (parcial)
@@ -18,6 +18,7 @@
  * - sheets: header x-api-key contra LEAD_API_KEYS, la key tiene que tener
  *   nombre "sheet-<algo>". La fuente del lead es <algo>.
  *   Ej: sheet-emanuel:abc123  -> fuente "emanuel"
+ *       sheet-fastlead:def456 -> fuente "fastlead"
  * - zapier / bot-lead-update: header x-zapier-key contra ZAPIER_WEBHOOK_KEY
  *   del .env (tiene que coincidir con el ZAPIER_KEY del bot).
  */
@@ -212,6 +213,8 @@ router.post('/sheets', requireSheetKey, async (req, res) => {
     const localidad = String(body.localidad || '').trim();
     const consulta = String(body.consulta || '').trim();
     const extras = String(body.notas || '').trim();
+    const email = String(body.email || '').trim();
+    const formaPago = String(body.formaPago || '').trim();
 
     console.log(`[sheets:${fuente}] Recibido:`, JSON.stringify(body));
 
@@ -251,6 +254,7 @@ router.post('/sheets', requireSheetKey, async (req, res) => {
     }
 
     const notas = [
+      email ? `Mail: ${email}` : '',
       localidad ? `Localidad: ${localidad}` : '',
       consulta ? `Consulta: ${consulta}` : '',
       extras
@@ -260,8 +264,8 @@ router.post('/sheets', requireSheetKey, async (req, res) => {
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at, assigned_at)
        VALUES
-        (?, ?, ?, 'vw', 'Consultar', 'nuevo', ?, ?, ?, NOW(), NOW())`,
-      [nombre, telefono, modelo || 'Consultar', fuente, notas, assigned_to]
+        (?, ?, ?, 'vw', ?, 'nuevo', ?, ?, ?, NOW(), NOW())`,
+      [nombre, telefono, modelo || 'Consultar', formaPago || 'Consultar', fuente, notas, assigned_to]
     );
 
     const [leadRows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId]);
