@@ -14,6 +14,7 @@ const getAssignedVendorByBrand = async (marca) => {
        LEFT JOIN leads l ON l.assigned_to = u.id
        WHERE u.role = 'vendedor' 
          AND u.active = 1
+         AND u.recibe_leads = 1   -- pausados: entran al CRM pero no reciben
        GROUP BY u.id, u.name
        ORDER BY u.id ASC`
     );
@@ -69,6 +70,7 @@ const getRoundRobinStatus = async () => {
        LEFT JOIN leads l ON l.assigned_to = u.id
        WHERE u.role = 'vendedor' 
          AND u.active = 1
+         AND u.recibe_leads = 1
        GROUP BY u.id, u.name, u.active
        ORDER BY u.id ASC`
     );
