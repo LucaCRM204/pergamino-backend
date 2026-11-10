@@ -10,6 +10,8 @@
  *
  * Tres estados distintos, no los mezcles:
  *   users.active = 0           -> cuenta de baja. Sale del equipo entero.
+ *   users.recibe_leads = 0     -> puede entrar al CRM pero no recibe leads
+ *                                 (se trata igual que si no estuviera en el reparto).
  *   distribucion.activo = 0    -> ya no pertenece a este equipo.
  *   distribucion.pausado = 1   -> está en el equipo pero no recibe leads.
  *
@@ -174,7 +176,7 @@ async function getSubEquipos(liderId, conn = pool) {
   const [rows] = await conn.query(
     `SELECT s.id, s.name, s.role,
             (SELECT COUNT(*) FROM users v
-              WHERE v.reportsTo = s.id AND v.active = 1 AND v.role = ?) AS vendedores
+              WHERE v.reportsTo = s.id AND v.active = 1 AND v.recibe_leads = 1 AND v.role = ?) AS vendedores
        FROM users s
       WHERE s.reportsTo = ? AND s.active = 1 AND s.role <> ?
       HAVING vendedores > 0
@@ -217,7 +219,7 @@ async function getVendedoresDeEquipo(equipoId, conn = pool) {
      SELECT DISTINCT u.id, u.name, u.role
        FROM users u
        INNER JOIN tree t ON u.id = t.id
-      WHERE u.active = 1 AND u.role = ?
+      WHERE u.active = 1 AND u.recibe_leads = 1 AND u.role = ?
       ORDER BY u.id`,
     [equipoId, ROL_VENDEDOR]
   );
@@ -560,7 +562,8 @@ async function idsHabilitados(scope) {
     `SELECT d.user_id
        FROM distribucion_pesos d
        JOIN users u ON u.id = d.user_id
-      WHERE d.scope = ? AND d.activo = 1 AND d.pausado = 0 AND u.active = 1`,
+      WHERE d.scope = ? AND d.activo = 1 AND d.pausado = 0 AND u.active = 1
+        AND (u.role <> 'vendedor' OR u.recibe_leads = 1)`,
     [scope]
   );
   return rows.map((r) => r.user_id).filter((id) => !EXCLUIDOS.has(id));
