@@ -21,6 +21,10 @@
  *       sheet-fastlead:def456 -> fuente "fastlead"
  * - zapier / bot-lead-update: header x-zapier-key contra ZAPIER_WEBHOOK_KEY
  *   del .env (tiene que coincidir con el ZAPIER_KEY del bot).
+ *
+ * Vendedores pausados (users.recibe_leads = 0): siguen entrando al CRM
+ * pero quedan afuera de todos los repartos automáticos de este archivo.
+ * Solo reciben si el lead viene con assigned_to explícito.
  */
 
 const express = require('express');
@@ -32,7 +36,9 @@ let roundRobinIndex = 0;
 
 async function getVendedoresActivos() {
   const [rows] = await pool.execute(
-    `SELECT id, name FROM users WHERE role = 'vendedor' AND active = 1 ORDER BY id`
+    `SELECT id, name FROM users
+      WHERE role = 'vendedor' AND active = 1 AND recibe_leads = 1
+      ORDER BY id`
   );
   return rows;
 }
@@ -321,7 +327,9 @@ router.post('/zapier', requireZapierKey, async (req, res) => {
     } else if (supervisor_id) {
       // Round-robin entre los vendedores de ese supervisor.
       const [vendedores] = await pool.execute(
-        `SELECT id FROM users WHERE role = 'vendedor' AND active = 1 AND reportsTo = ? ORDER BY id`,
+        `SELECT id FROM users
+          WHERE role = 'vendedor' AND active = 1 AND recibe_leads = 1 AND reportsTo = ?
+          ORDER BY id`,
         [supervisor_id]
       );
       if (vendedores.length > 0) {
@@ -338,7 +346,7 @@ router.post('/zapier', requireZapierKey, async (req, res) => {
       const [vendedores] = await pool.execute(
         `SELECT u.id FROM users u
          LEFT JOIN users sup ON sup.id = u.reportsTo
-         WHERE u.role = 'vendedor' AND u.active = 1
+         WHERE u.role = 'vendedor' AND u.active = 1 AND u.recibe_leads = 1
            AND (u.reportsTo = ? OR sup.reportsTo = ?)
          ORDER BY u.id`,
         [equipo, equipo]

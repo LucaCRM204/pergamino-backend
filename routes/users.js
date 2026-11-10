@@ -8,7 +8,7 @@ const router = express.Router();
 router.get('/', async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT id, name, email, role, reportsTo, active, created_at, updated_at FROM users ORDER BY id ASC'
+      'SELECT id, name, email, role, reportsTo, active, recibe_leads, created_at, updated_at FROM users ORDER BY id ASC'
     );
     res.json(rows);
   } catch (e) {
@@ -20,16 +20,16 @@ router.get('/', async (_req, res) => {
 // POST /users  → crear usuario
 router.post('/', async (req, res) => {
   try {
-    const { name, email, password = '123456', role = 'vendedor', reportsTo = null, active = 1 } = req.body || {};
+    const { name, email, password = '123456', role = 'vendedor', reportsTo = null, active = 1, recibe_leads = 1 } = req.body || {};
     
     // HASHEAR LA CONTRASEÑA antes de guardar
     const hashedPassword = await bcrypt.hash(password, 10);
     
     const [r] = await pool.query(
-      'INSERT INTO users (name,email,password,role,reportsTo,active) VALUES (?,?,?,?,?,?)',
-      [name, email, hashedPassword, role, reportsTo, active ? 1 : 0]
+      'INSERT INTO users (name,email,password,role,reportsTo,active,recibe_leads) VALUES (?,?,?,?,?,?,?)',
+      [name, email, hashedPassword, role, reportsTo, active ? 1 : 0, Number(recibe_leads) === 0 ? 0 : 1]
     );
-    const [row] = await pool.query('SELECT id, name, email, role, reportsTo, active FROM users WHERE id=?', [r.insertId]);
+    const [row] = await pool.query('SELECT id, name, email, role, reportsTo, active, recibe_leads FROM users WHERE id=?', [r.insertId]);
 
     // Entra al reparto de su equipo y los porcentajes se reacomodan solos.
     try { await dist.invalidarPorUsuario(r.insertId); }
@@ -46,7 +46,8 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    const fields = ['name','email','password','role','reportsTo','active'];
+    // recibe_leads: 0 = pausado (entra al CRM pero no recibe leads automáticos)
+    const fields = ['name','email','password','role','reportsTo','active','recibe_leads'];
     const sets = [];
     const vals = [];
     
@@ -56,6 +57,10 @@ router.put('/:id', async (req, res) => {
         // Si es password, hashearla antes de guardar
         if (f === 'password') {
           vals.push(await bcrypt.hash(req.body[f], 10));
+        } else if (f === 'active' || f === 'recibe_leads') {
+          // Llega como true/false, 1/0 o "1"/"0": se guarda siempre 0/1
+          const v = req.body[f];
+          vals.push(v === true || v === 1 || v === '1' || v === 'true' ? 1 : 0);
         } else {
           vals.push(req.body[f]);
         }
@@ -68,12 +73,12 @@ router.put('/:id', async (req, res) => {
 
     // Si lo desactivaron, lo reactivaron o lo cambiaron de equipo,
     // sale/entra del reparto en el acto y los demas se reacomodan.
-    if ('active' in req.body || 'reportsTo' in req.body || 'role' in req.body) {
+    if ('active' in req.body || 'recibe_leads' in req.body || 'reportsTo' in req.body || 'role' in req.body) {
       try { await dist.invalidarPorUsuario(id); }
       catch (e) { console.error('[USERS UPDATE] resync distribucion:', e.message); }
     }
 
-    const [row] = await pool.query('SELECT id, name, email, role, reportsTo, active FROM users WHERE id=?', [id]);
+    const [row] = await pool.query('SELECT id, name, email, role, reportsTo, active, recibe_leads FROM users WHERE id=?', [id]);
     res.json(row[0]);
   } catch (e) {
     console.error('[USERS UPDATE]', e);
